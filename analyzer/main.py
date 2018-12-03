@@ -1,9 +1,11 @@
 netname = "../mnist_nets/mnist_relu_3_10.txt"
 specname = "../mnist_images/img0.txt"
 epsilon = 0.0178
-epsilon = 0
+# epsilon = 0.005
+# epsilon = 0
 
 import analyzer
+import gurobi
 
 nn, image, bounds_before, bounds_after = analyzer.doAnalysis(netname, specname, epsilon)
 
@@ -23,3 +25,5 @@ for i in range(10):
     for j in range(10):
         y[i] += nn.weights[2][i][j] * x[j]
     y[i] += nn.biases[2][i]
+
+m = gurobi.createNetwork(nn, image[0], image[1], bounds_before)
