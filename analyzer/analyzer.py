@@ -18,6 +18,8 @@ from ctypes.util import find_library
 from gurobipy import *
 import time
 
+from math import inf
+
 libc = CDLL(find_library('c'))
 cstdout = c_void_p.in_dll(libc, 'stdout')
 
@@ -215,7 +217,7 @@ def analyze(nn, LB_N0, UB_N0, label):
     elina_manager_free(man)        
     return predicted_label, verified_flag, all_bounds_before, all_bounds_after
 
-def doAnalysis(netname, specname, epsilon):
+def doInterval(netname, specname, epsilon):
     #c_label = int(argv[4])
     with open(netname, 'r') as netfile:
         netstring = netfile.read()
@@ -230,16 +232,159 @@ def doAnalysis(netname, specname, epsilon):
     if(label==int(x0_low[0])):
         LB_N0, UB_N0 = get_perturbed_image(x0_low,epsilon)
         _, verified_flag, bounds_before, bounds_after = analyze(nn,LB_N0,UB_N0,label)
-        if(verified_flag):
-            print("verified")
-        else:
-            print("can not be verified")
+        # if(verified_flag):
+            # print("verified")
+        # else:
+            # print("can not be verified")
     else:
         print("image not correctly classified by the network. expected label ",int(x0_low[0]), " classified label: ", label)
     end = time.time()
     print("analysis time: ", (end-start), " seconds")
 
-    return nn, (LB_N0, UB_N0), bounds_before, bounds_after
+    return verified_flag, nn, (LB_N0, UB_N0), bounds_before, bounds_after, label
+
+# ------------------------------------------
+# OTHER CODE
+# ------------------------------------------
+
+def connectRelu(m, H, RELU_H, a, b):
+	if b <= 0:
+		m.addConstr(RELU_H == 0)
+	elif a >= 0:
+		m.addConstr(RELU_H == H)
+	else:
+		m.addConstr(RELU_H >= H)
+		alpha = b / (b - a)
+		m.addConstr(RELU_H <= alpha * (H - a))
+
+def getMin(bound):
+    return bound.contents.inf.contents.val.dbl
+
+def getMax(bound):
+    return bound.contents.sup.contents.val.dbl
+
+def createNetwork(nn, x_min, x_max, bounds_before, label, k=0):
+    # k = 0 -> from beginning
+    # k = 0 -> x_* = image_*
+    m = Model('NN')
+
+    x = []
+    for i in range(len(x_min)):
+        x.append(m.addVar(vtype=GRB.CONTINUOUS, name="x_" + str(i)))
+    current_layer = x
+
+    m.update()
+
+    i = 0
+    for a, b in zip(x_min, x_max):
+        m.addConstr(x[i] >= a)
+        m.addConstr(x[i] <= b)
+        i += 1
+
+    for i in range(k, nn.numlayer):
+
+        w = nn.weights[i]
+        RELU_H = []
+
+        for j in range(len(list(w))):
+            name = "h_" + str(i) + "_" + str(j)
+            h = m.addVar(-inf, vtype=GRB.CONTINUOUS, name=name)
+            relu_h = m.addVar(0, vtype=GRB.CONTINUOUS, name="RELU_" + name)
+            value = 0
+            for l in range(len(current_layer)):
+                value += w[j][l] * current_layer[l]
+            value += nn.biases[i][j]
+            m.update()
+            m.addConstr(value == h)
+
+            bound = bounds_before[i][j]
+            connectRelu(m, h, relu_h, getMin(bound), getMax(bound))
+
+            RELU_H.append(relu_h)
+
+        current_layer = RELU_H
+
+    maxi = m.addVar(-inf, vtype=GRB.CONTINUOUS, name="maxi")
+    final_result = m.addVar(-inf, vtype=GRB.CONTINUOUS, name="final")
+
+    m.update()
+
+    l = current_layer[:label] + current_layer[label + 1:]
+    m.addConstr(maxi == max_(l))
+    m.addConstr(final_result == current_layer[label] - maxi)
+
+    m.setObjective(final_result, GRB.MINIMIZE)
+
+    m.optimize()
+    status = m.status
+
+    value = -1
+
+    if status == GRB.Status.OPTIMAL:
+        value = m.objVal
+    elif status == GRB.Status.INFEASIBLE:
+        print('Optimization was stopped with status %d' % status)
+        m.computeIIS()
+        for c in m.getConstrs():
+            if c.IISConstr:
+                print('%s' % c.constrName)
+
+    return value
+
+def doAnalysis(netname, specname, epsilon):
+
+    seq_tactic = False
+
+    verified_flag, nn, image, bounds_before, bounds_after, label = doInterval(netname, specname, epsilon)
+
+    if verified_flag:
+        print("verified")
+        return
+
+    def read(x, bounds):
+        a = []
+        b = []
+        for i in range(10):
+            a.append(bounds[x][i].contents.inf.contents.val.dbl)
+            b.append(bounds[x][i].contents.sup.contents.val.dbl)
+        return a, b
+
+    if seq_tactic:
+        for k in range(nn.numlayer - 1, -1, -1):
+            print("Trying k = " + str(k) + "...")
+            if k == 0:
+                a, b = image
+            else:
+                a, b = read(k, bounds_after)
+            r = createNetwork(nn, a, b, bounds_before, label, k=k)
+
+            if r > 0:
+                print("verified")
+                return
+    else:
+        comp_k = 1
+        go_on = True
+        while go_on:
+            k = nn.numlayer - comp_k
+            print("Trying k = " + str(k) + "...")
+            if k == 0:
+                a, b = image
+            else:
+                a, b = read(k, bounds_after)
+            r = createNetwork(nn, a, b, bounds_before, label, k=k)
+
+            if r > 0:
+                print("verified")
+                return
+
+            if comp_k == nn.numlayer:
+                go_on = False
+            else:
+                comp_k = comp_k * 2
+                if comp_k > nn.numlayer:
+                    comp_k = nn.numlayer
+
+    print("can not be verified")
 
 if __name__ == '__main__':
     from sys import argv
