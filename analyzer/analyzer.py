@@ -1,7 +1,6 @@
 import sys
 sys.path.insert(0, '../../ELINA/python_interface/')
 
-
 import numpy as np
 import re
 import csv
@@ -132,6 +131,9 @@ def analyze(nn, LB_N0, UB_N0, label):
     for i in range(num_pixels):
         elina_interval_set_double(itv[i],LB_N0[i],UB_N0[i])
 
+    all_bounds_before = []
+    all_bounds_after = []
+
     ## construct input abstraction
     element = elina_abstract0_of_box(man, 0, num_pixels, itv)
     elina_interval_array_free(itv,num_pixels)
@@ -162,10 +164,15 @@ def analyze(nn, LB_N0, UB_N0, label):
                dimrem.contents.dim[i] = i
            elina_abstract0_remove_dimensions(man, True, element, dimrem)
            elina_dimchange_free(dimrem)
+
+           all_bounds_before.append(elina_abstract0_to_box(man, element))
+
            # handle ReLU layer 
            if(nn.layertypes[layerno]=='ReLU'):
               element = relu_box_layerwise(man,True,element,0, num_out_pixels)
            nn.ffn_counter+=1 
+
+           all_bounds_after.append(elina_abstract0_to_box(man, element))
 
         else:
            print(' net type not supported')
@@ -206,9 +213,33 @@ def analyze(nn, LB_N0, UB_N0, label):
     elina_interval_array_free(bounds,output_size)
     elina_abstract0_free(man,element)
     elina_manager_free(man)        
-    return predicted_label, verified_flag
+    return predicted_label, verified_flag, all_bounds_before, all_bounds_after
 
+def doAnalysis(netname, specname, epsilon):
+    #c_label = int(argv[4])
+    with open(netname, 'r') as netfile:
+        netstring = netfile.read()
+    with open(specname, 'r') as specfile:
+        specstring = specfile.read()
+    nn = parse_net(netstring)
+    x0_low, x0_high = parse_spec(specstring)
+    LB_N0, UB_N0 = get_perturbed_image(x0_low,0)
 
+    label, _, _, _ = analyze(nn,LB_N0,UB_N0,0)
+    start = time.time()
+    if(label==int(x0_low[0])):
+        LB_N0, UB_N0 = get_perturbed_image(x0_low,epsilon)
+        _, verified_flag, bounds_before, bounds_after = analyze(nn,LB_N0,UB_N0,label)
+        if(verified_flag):
+            print("verified")
+        else:
+            print("can not be verified")
+    else:
+        print("image not correctly classified by the network. expected label ",int(x0_low[0]), " classified label: ", label)
+    end = time.time()
+    print("analysis time: ", (end-start), " seconds")
+
+    return nn, (LB_N0, UB_N0), bounds_before, bounds_after
 
 if __name__ == '__main__':
     from sys import argv
@@ -219,27 +250,5 @@ if __name__ == '__main__':
     netname = argv[1]
     specname = argv[2]
     epsilon = float(argv[3])
-    #c_label = int(argv[4])
-    with open(netname, 'r') as netfile:
-        netstring = netfile.read()
-    with open(specname, 'r') as specfile:
-        specstring = specfile.read()
-    nn = parse_net(netstring)
-    x0_low, x0_high = parse_spec(specstring)
-    LB_N0, UB_N0 = get_perturbed_image(x0_low,0)
-    
-    label, _ = analyze(nn,LB_N0,UB_N0,0)
-    start = time.time()
-    if(label==int(x0_low[0])):
-        LB_N0, UB_N0 = get_perturbed_image(x0_low,epsilon)
-        _, verified_flag = analyze(nn,LB_N0,UB_N0,label)
-        if(verified_flag):
-            print("verified")
-        else:
-            print("can not be verified")  
-    else:
-        print("image not correctly classified by the network. expected label ",int(x0_low[0]), " classified label: ", label)
-    end = time.time()
-    print("analysis time: ", (end-start), " seconds")
-    
 
+    doAnalysis(netname, specname, epsilon)
