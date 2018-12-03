@@ -1,5 +1,5 @@
 import sys
-sys.path.insert(0, '../ELINA/python_interface/')
+sys.path.insert(0, '../../ELINA/python_interface/')
 
 
 import numpy as np
