@@ -229,7 +229,13 @@ def doInterval(netname, specname, epsilon):
 
     label, _, _, _ = analyze(nn,LB_N0,UB_N0,0)
     start = time.time()
+
+    verified_flag = None
+    bounds_before = None
+    bounds_after = None
+
     if(label==int(x0_low[0])):
+        correctly_classified = True
         LB_N0, UB_N0 = get_perturbed_image(x0_low,epsilon)
         _, verified_flag, bounds_before, bounds_after = analyze(nn,LB_N0,UB_N0,label)
         # if(verified_flag):
@@ -237,14 +243,15 @@ def doInterval(netname, specname, epsilon):
         # else:
             # print("can not be verified")
     else:
+        correctly_classified = False
         print("image not correctly classified by the network. expected label ",int(x0_low[0]), " classified label: ", label)
     end = time.time()
     print("analysis time: ", (end-start), " seconds")
 
-    return verified_flag, nn, (LB_N0, UB_N0), bounds_before, bounds_after, label
+    return verified_flag, correctly_classified, nn, (LB_N0, UB_N0), bounds_before, bounds_after, label
 
 # ------------------------------------------
-# OTHER CODE
+# OUR CODE
 # ------------------------------------------
 
 def connectRelu(m, H, RELU_H, a, b):
@@ -270,43 +277,41 @@ def createNetwork(nn, x_min, x_max, bounds_before, label, k=0):
 
     x = []
     for i in range(len(x_min)):
-        x.append(m.addVar(vtype=GRB.CONTINUOUS, name="x_" + str(i)))
+        x.append(m.addVar(lb=x_min[i], ub=x_max[i], vtype=GRB.CONTINUOUS, name="x_" + str(i)))
     current_layer = x
 
     m.update()
 
-    i = 0
-    for a, b in zip(x_min, x_max):
-        m.addConstr(x[i] >= a)
-        m.addConstr(x[i] <= b)
-        i += 1
-
     for i in range(k, nn.numlayer):
 
-        w = nn.weights[i]
         RELU_H = []
 
-        for j in range(len(list(w))):
-            name = "h_" + str(i) + "_" + str(j)
-            h = m.addVar(-inf, vtype=GRB.CONTINUOUS, name=name)
-            relu_h = m.addVar(0, vtype=GRB.CONTINUOUS, name="RELU_" + name)
-            value = 0
-            for l in range(len(current_layer)):
-                value += w[j][l] * current_layer[l]
-            value += nn.biases[i][j]
-            m.update()
-            m.addConstr(value == h)
+        for j in range(len(list(nn.weights[i]))):
 
             bound = bounds_before[i][j]
-            connectRelu(m, h, relu_h, getMin(bound), getMax(bound))
+            a = getMin(bound)
+            b = getMax(bound)
+
+            name = "h_" + str(i) + "_" + str(j)
+            h = m.addVar(lb=a, ub=b, vtype=GRB.CONTINUOUS, name=name)
+            m.update()
+
+            value = 0
+            for l in range(len(current_layer)):
+                value += nn.weights[i][j][l] * current_layer[l]
+            value += nn.biases[i][j]
+            m.addConstr(value == h)
+
+            relu_h = m.addVar(lb=0, ub=max(b, 0), vtype=GRB.CONTINUOUS, name="RELU_" + name)
+            m.update()
+            connectRelu(m, h, relu_h, a, b)
 
             RELU_H.append(relu_h)
 
         current_layer = RELU_H
 
-    maxi = m.addVar(-inf, vtype=GRB.CONTINUOUS, name="maxi")
-    final_result = m.addVar(-inf, vtype=GRB.CONTINUOUS, name="final")
-
+    maxi = m.addVar(lb=0, vtype=GRB.CONTINUOUS, name="maxi")
+    final_result = m.addVar(lb=-inf, vtype=GRB.CONTINUOUS, name="final")
     m.update()
 
     l = current_layer[:label] + current_layer[label + 1:]
@@ -315,19 +320,30 @@ def createNetwork(nn, x_min, x_max, bounds_before, label, k=0):
 
     m.setObjective(final_result, GRB.MINIMIZE)
 
+    m.Params.DualReductions = 0
     m.optimize()
-    status = m.status
 
     value = -1
 
+    # DEBUG if INFEASIBLE OR UNBOUNDED
+    status = m.status
     if status == GRB.Status.OPTIMAL:
         value = m.objVal
     elif status == GRB.Status.INFEASIBLE:
-        print('Optimization was stopped with status %d' % status)
+        print("ERROR: INFEASIBLE")
         m.computeIIS()
         for c in m.getConstrs():
             if c.IISConstr:
                 print('%s' % c.constrName)
+        for v in m.getVars():
+            if v.IISLB:
+                print("Lower bound", v.varName, v.LB)
+            if v.IISUB:
+                print("Upper bound", v.varName, v.UB)
+        m.write("file.lp")
+        sys.exit()
+    elif status == GRB.Status.UNBOUNDED:
+        print("ERROR: UNBOUNDED")
 
     return value
 
@@ -335,18 +351,29 @@ def doAnalysis(netname, specname, epsilon):
 
     seq_tactic = False
 
-    verified_flag, nn, image, bounds_before, bounds_after, label = doInterval(netname, specname, epsilon)
+    verified_flag, correctly_classified, nn, image, bounds_before, bounds_after, label = doInterval(netname, specname, epsilon)
 
-    if verified_flag:
-        print("verified")
+    if not correctly_classified:
+        print("interval: can not be verified")
         return
+    if verified_flag:
+        print("interval: verified")
+        # return
+    else:
+        print("interval: not verified")
 
-    def read(x, bounds):
+    def read(nn, x, bounds):
         a = []
         b = []
-        for i in range(10):
+        # for bo in bounds[x]:
+        # for i in range(len(bounds[x])):
+        print("BEFORE")
+        for i in range(len(nn.weights[x+1][0])):
             a.append(bounds[x][i].contents.inf.contents.val.dbl)
+            # a.append(bo.contents.inf.contents.val.dbl)
             b.append(bounds[x][i].contents.sup.contents.val.dbl)
+            # b.append(bo.contents.sup.contents.val.dbl)
+        print("AFTER")
         return a, b
 
     if seq_tactic:
@@ -355,7 +382,7 @@ def doAnalysis(netname, specname, epsilon):
             if k == 0:
                 a, b = image
             else:
-                a, b = read(k, bounds_after)
+                a, b = read(nn, k-1, bounds_after)
             r = createNetwork(nn, a, b, bounds_before, label, k=k)
 
             if r > 0:
@@ -370,9 +397,11 @@ def doAnalysis(netname, specname, epsilon):
             if k == 0:
                 a, b = image
             else:
-                a, b = read(k, bounds_after)
+                a, b = read(nn, k-1, bounds_after)
+                print(a)
             r = createNetwork(nn, a, b, bounds_before, label, k=k)
 
+            print("verification: k = " + str(k) + ", r = " + str(r))
             if r > 0:
                 print("verified")
                 return
