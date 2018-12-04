@@ -264,13 +264,7 @@ def connectRelu(m, H, RELU_H, a, b):
 		alpha = b / (b - a)
 		m.addConstr(RELU_H <= alpha * (H - a))
 
-def getMin(bound):
-    return bound.contents.inf.contents.val.dbl
-
-def getMax(bound):
-    return bound.contents.sup.contents.val.dbl
-
-def createNetwork(nn, x_min, x_max, bounds_before, label, k=0):
+def createNetwork(nn, x_min, x_max, lower_before, upper_before, label, k=0, last_layer=None):
     # k = 0 -> from beginning
     # k = 0 -> x_* = image_*
     m = Model('NN')
@@ -278,19 +272,23 @@ def createNetwork(nn, x_min, x_max, bounds_before, label, k=0):
     x = []
     for i in range(len(x_min)):
         x.append(m.addVar(lb=x_min[i], ub=x_max[i], vtype=GRB.CONTINUOUS, name="x_" + str(i)))
+    previous_layer = None
     current_layer = x
 
     m.update()
 
-    for i in range(k, nn.numlayer):
+    if last_layer is None:
+        last_layer = nn.numlayer
 
+    for i in range(k, last_layer):
+
+        H = []
         RELU_H = []
 
         for j in range(len(list(nn.weights[i]))):
 
-            bound = bounds_before[i][j]
-            a = getMin(bound)
-            b = getMax(bound)
+            a = lower_before[i][j]
+            b = upper_before[i][j]
 
             name = "h_" + str(i) + "_" + str(j)
             h = m.addVar(lb=a, ub=b, vtype=GRB.CONTINUOUS, name=name)
@@ -306,22 +304,37 @@ def createNetwork(nn, x_min, x_max, bounds_before, label, k=0):
             m.update()
             connectRelu(m, h, relu_h, a, b)
 
+            H.append(h)
             RELU_H.append(relu_h)
 
+        previous_layer = H
         current_layer = RELU_H
 
-    maxi = m.addVar(lb=0, vtype=GRB.CONTINUOUS, name="maxi")
-    final_result = m.addVar(lb=-inf, vtype=GRB.CONTINUOUS, name="final")
-    m.update()
+    return m, previous_layer, current_layer
 
-    l = current_layer[:label] + current_layer[label + 1:]
-    m.addConstr(maxi == max_(l))
-    m.addConstr(final_result == current_layer[label] - maxi)
+def improveBounds(nn, x_min, x_max, lower_before, upper_before, label, k, last_layer):
 
-    m.setObjective(final_result, GRB.MINIMIZE)
+    m, current_layer, _ = createNetwork(nn, x_min, x_max, lower_before, upper_before, label, k, last_layer=last_layer)
+
+    lower_bounds = []
+    upper_bounds = []
 
     m.Params.DualReductions = 0
-    m.optimize()
+    for i in range(len(current_layer)):
+
+        m.setObjective(current_layer[i], GRB.MINIMIZE)
+        m.optimize()
+        value = printResults(m)
+        lower_bounds.append(value)
+
+        m.setObjective(current_layer[i], GRB.MAXIMIZE)
+        m.optimize()
+        value = printResults(m)
+        upper_bounds.append(value)
+
+    return lower_bounds, upper_bounds
+
+def printResults(m):
 
     value = -1
 
@@ -347,9 +360,39 @@ def createNetwork(nn, x_min, x_max, bounds_before, label, k=0):
 
     return value
 
-def doAnalysis(netname, specname, epsilon):
+def analyzeEnd(nn, x_min, x_max, lower_before, lower_after, label, k=0):
 
-    seq_tactic = False
+    m, _, current_layer = createNetwork(nn, x_min, x_max, lower_before, lower_after, label, k)
+
+    maxi = m.addVar(lb=0, vtype=GRB.CONTINUOUS, name="maxi")
+    final_result = m.addVar(lb=-inf, vtype=GRB.CONTINUOUS, name="final")
+    m.update()
+
+    l = current_layer[:label] + current_layer[label + 1:]
+    m.addConstr(maxi == max_(l))
+    m.addConstr(final_result == current_layer[label] - maxi)
+
+    m.setObjective(final_result, GRB.MINIMIZE)
+
+    m.Params.DualReductions = 0
+    m.optimize()
+
+    value = printResults(m)
+
+    return value
+
+def convertBounds(bounds, nn):
+    lower_bounds = []
+    upper_bounds = []
+    for i in range(nn.numlayer):
+        lower_bounds.append([])
+        upper_bounds.append([])
+        for j in range(len(nn.weights[i])):
+            lower_bounds[i].append(bounds[i][j].contents.inf.contents.val.dbl)
+            upper_bounds[i].append(bounds[i][j].contents.sup.contents.val.dbl)
+    return lower_bounds, upper_bounds
+
+def doAnalysis(netname, specname, epsilon):
 
     verified_flag, correctly_classified, nn, image, bounds_before, bounds_after, label = doInterval(netname, specname, epsilon)
 
@@ -362,50 +405,53 @@ def doAnalysis(netname, specname, epsilon):
     else:
         print("interval: not verified")
 
-    def read(nn, x, bounds):
-        a = []
-        b = []
-        # for bo in bounds[x]:
-        # for i in range(len(bounds[x])):
-        print("BEFORE")
-        for i in range(len(nn.weights[x+1][0])):
-            a.append(bounds[x][i].contents.inf.contents.val.dbl)
-            # a.append(bo.contents.inf.contents.val.dbl)
-            b.append(bounds[x][i].contents.sup.contents.val.dbl)
-            # b.append(bo.contents.sup.contents.val.dbl)
-        print("AFTER")
-        return a, b
+    lower_before, upper_before = convertBounds(bounds_before, nn)
+    lower_after, upper_after = convertBounds(bounds_after, nn)
 
-    if seq_tactic:
-        for k in range(nn.numlayer - 1, -1, -1):
-            print("Trying k = " + str(k) + "...")
-            if k == 0:
-                a, b = image
-            else:
-                a, b = read(nn, k-1, bounds_after)
-            r = createNetwork(nn, a, b, bounds_before, label, k=k)
+    def improveFromTo(start, end):
+        if start == 0:
+            a, b = image
+        else:
+            a = lower_after[start-1]
+            b = upper_after[start-1]
 
-            if r > 0:
-                print("verified")
-                return
-    else:
+        lower, upper = improveBounds(nn, a, b, lower_before, upper_before, label, start, end)
+        lower_before[end - 1] = lower
+        upper_before[end - 1] = upper
+
+    def tryToFinishFrom(k):
+        if k == 0:
+            a, b = image
+        else:
+            a = lower_after[k-1]
+            b = upper_after[k-1]
+        return analyzeEnd(nn, a, b, lower_before, upper_before, label, k=k)
+
+    # STRATEGIES / HEURISTICS
+
+    strategy_doubling = True
+    improve_bounds_two_by_two = True
+    improve_bounds_three_by_three = True
+
+    if improve_bounds_two_by_two:
+        for k in range(nn.numlayer - 1):
+            improveFromTo(k, k+2)
+
+    if improve_bounds_three_by_three:
+        for k in range(nn.numlayer - 2):
+            improveFromTo(k, k+3)
+
+    if strategy_doubling:
         comp_k = 1
         go_on = True
         while go_on:
             k = nn.numlayer - comp_k
             print("Trying k = " + str(k) + "...")
-            if k == 0:
-                a, b = image
-            else:
-                a, b = read(nn, k-1, bounds_after)
-                print(a)
-            r = createNetwork(nn, a, b, bounds_before, label, k=k)
-
+            r = tryToFinishFrom(k)
             print("verification: k = " + str(k) + ", r = " + str(r))
             if r > 0:
                 print("verified")
                 return
-
             if comp_k == nn.numlayer:
                 go_on = False
             else:
