@@ -23,6 +23,8 @@ from math import inf
 libc = CDLL(find_library('c'))
 cstdout = c_void_p.in_dll(libc, 'stdout')
 
+lower_before, lower_after, upper_before, upper_after = None, None, None, None
+
 class layers:
     def __init__(self):
         self.layertypes = []
@@ -448,6 +450,8 @@ def convertBounds(bounds, nn):
 
 def doAnalysis(netname, specname, epsilon):
 
+    global lower_before, lower_after, upper_before, upper_after
+
     verified_flag, correctly_classified, nn, image, bounds_before, bounds_after, label = doInterval(netname, specname, epsilon)
 
     if not correctly_classified:
@@ -462,21 +466,10 @@ def doAnalysis(netname, specname, epsilon):
     lower_before, upper_before = convertBounds(bounds_before, nn)
     lower_after, upper_after = convertBounds(bounds_after, nn)
 
-    print("verif lower before 1", lower_before[-1][:4])
-    print("verif upper before 1", upper_before[-1][:4])
-    print("verif lower after 1", lower_after[-1][:4])
-    print("verif upper after 1", upper_after[-1][:4])
-
-    verified_flag, correctly_classified, nn, image, bounds_before, bounds_after, label = doInterval(netname, specname, epsilon, lower_before, upper_before)
-
-
-    lower_before, upper_before = convertBounds(bounds_before, nn)
-    lower_after, upper_after = convertBounds(bounds_after, nn)
-
-    print("verif lower before 2", lower_before[-1][:4])
-    print("verif upper before 2", upper_before[-1][:4])
-    print("verif lower after 2", lower_after[-1][:4])
-    print("verif upper after 2", upper_after[-1][:4])
+    # print("verif lower before 1", lower_before[-1][:4])
+    # print("verif upper before 1", upper_before[-1][:4])
+    # print("verif lower after 1", lower_after[-1][:4])
+    # print("verif upper after 1", upper_after[-1][:4])
 
     def improveFromTo(start, end):
         if start == 0:
@@ -488,6 +481,19 @@ def doAnalysis(netname, specname, epsilon):
         lower, upper = improveBounds(nn, a, b, lower_before, upper_before, label, start, end)
         lower_before[end - 1] = lower
         upper_before[end - 1] = upper
+
+    def doIntervalAgain():
+
+        global lower_before, lower_after, upper_before, upper_after
+
+        verified_flag, correctly_classified, nn, image, bounds_before, bounds_after, label = doInterval(netname, specname, epsilon, lower_before, upper_before)
+        lower_before, upper_before = convertBounds(bounds_before, nn)
+        lower_after, upper_after = convertBounds(bounds_after, nn)
+
+        if verified_flag:
+            print("Now verified by interval!")
+        else:
+            print("Still not verified by interval")
 
     def tryToFinishFrom(k):
         if k == 0:
@@ -510,6 +516,8 @@ def doAnalysis(netname, specname, epsilon):
     if improve_bounds_three_by_three:
         for k in range(nn.numlayer - 2):
             improveFromTo(k, k+3)
+
+    doIntervalAgain()
 
     if strategy_doubling:
         comp_k = 1
