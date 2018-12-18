@@ -24,6 +24,7 @@ libc = CDLL(find_library('c'))
 cstdout = c_void_p.in_dll(libc, 'stdout')
 
 lower_before, lower_after, upper_before, upper_after = None, None, None, None
+netstring, specstring, nn, classified_label = None, None, None, None
 
 class layers:
     def __init__(self):
@@ -274,16 +275,27 @@ def analyze(nn, LB_N0, UB_N0, label, old_lower_before=None, old_upper_before=Non
     return predicted_label, verified_flag, all_bounds_before, all_bounds_after
 
 def doInterval(netname, specname, epsilon, lower_before=None, upper_before=None):
+
+    global netstring, specstring, nn, classified_label
+
     #c_label = int(argv[4])
-    with open(netname, 'r') as netfile:
-        netstring = netfile.read()
-    with open(specname, 'r') as specfile:
-        specstring = specfile.read()
-    nn = parse_net(netstring)
+    if netstring is None:
+        with open(netname, 'r') as netfile:
+            netstring = netfile.read()
+    if specstring is None:
+        with open(specname, 'r') as specfile:
+            specstring = specfile.read()
+    if nn is None:
+        nn = parse_net(netstring)
     x0_low, x0_high = parse_spec(specstring)
     LB_N0, UB_N0 = get_perturbed_image(x0_low,0)
 
-    label, _, _, _ = analyze(nn,LB_N0,UB_N0,0)
+    if classified_label is None:
+        label, _, _, _ = analyze(nn,LB_N0,UB_N0,0)
+        classified_label = label
+    else:
+        label = classified_label
+
     start = time.time()
 
     verified_flag = None
@@ -452,7 +464,9 @@ def doAnalysis(netname, specname, epsilon):
 
     global lower_before, lower_after, upper_before, upper_after
 
+    t0 = time.time()
     verified_flag, correctly_classified, nn, image, bounds_before, bounds_after, label = doInterval(netname, specname, epsilon)
+    t1 = time.time()
 
     if not correctly_classified:
         print("interval: can not be verified")
@@ -509,6 +523,12 @@ def doAnalysis(netname, specname, epsilon):
     improve_bounds_two_by_two = True
     improve_bounds_three_by_three = True
 
+    t2 = time.time()
+    doIntervalAgain()
+    t3 = time.time()
+
+    print("verif time", t1 - t0, t3 - t2)
+
     if improve_bounds_two_by_two:
         for k in range(nn.numlayer - 1):
             improveFromTo(k, k+2)
@@ -517,7 +537,11 @@ def doAnalysis(netname, specname, epsilon):
         for k in range(nn.numlayer - 2):
             improveFromTo(k, k+3)
 
+    t4 = time.time()
     doIntervalAgain()
+    t5 = time.time()
+
+    print("verif time", t1 - t0, t3 - t2, t5 - t4)
 
     if strategy_doubling:
         comp_k = 1
