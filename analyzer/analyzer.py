@@ -23,6 +23,9 @@ from math import inf
 libc = CDLL(find_library('c'))
 cstdout = c_void_p.in_dll(libc, 'stdout')
 
+lower_before, lower_after, upper_before, upper_after = None, None, None, None
+netstring, specstring, nn, classified_label = None, None, None, None
+
 class layers:
     def __init__(self):
         self.layertypes = []
@@ -107,7 +110,7 @@ def get_perturbed_image(x, epsilon):
     num_pixels = len(image)
     LB_N0 = image - epsilon
     UB_N0 = image + epsilon
-     
+
     for i in range(num_pixels):
         if(LB_N0[i] < 0):
             LB_N0[i] = 0
@@ -124,7 +127,47 @@ def generate_linexpr0(weights, bias, size):
         elina_linexpr0_set_coeff_scalar_double(linexpr0,i,weights[i])
     return linexpr0
 
-def analyze(nn, LB_N0, UB_N0, label):   
+def performIntersection(man, element, i, a, b):
+
+    #create an array of two linear constraints
+    lincons0_array = elina_lincons0_array_make(2)
+
+    #Create a greater than or equal to inequality for the lower bound
+    lincons0_array.p[0].constyp = c_uint(ElinaConstyp.ELINA_CONS_SUPEQ)
+    linexpr0 = elina_linexpr0_alloc(ElinaLinexprDiscr.ELINA_LINEXPR_SPARSE, 1)
+    cst = pointer(linexpr0.contents.cst)
+
+    #plug the lower bound “a” here
+    elina_scalar_set_double(cst.contents.val.scalar, -a)
+    linterm = pointer(linexpr0.contents.p.linterm[0])
+
+    #plug the dimension “i” here
+    linterm.contents.dim = ElinaDim(i)
+    coeff = pointer(linterm.contents.coeff)
+    elina_scalar_set_double(coeff.contents.val.scalar, 1)
+    lincons0_array.p[0].linexpr0 = linexpr0
+
+    #create a greater than or equal to inequality for the upper bound
+    lincons0_array.p[1].constyp = c_uint(ElinaConstyp.ELINA_CONS_SUPEQ)
+    linexpr0 = elina_linexpr0_alloc(ElinaLinexprDiscr.ELINA_LINEXPR_SPARSE, 1)
+    cst = pointer(linexpr0.contents.cst)
+
+    #plug the upper bound “b” here
+    elina_scalar_set_double(cst.contents.val.scalar, b)
+    linterm = pointer(linexpr0.contents.p.linterm[0])
+
+    #plug the dimension “i” here
+    linterm.contents.dim = ElinaDim(i)
+    coeff = pointer(linterm.contents.coeff)
+    elina_scalar_set_double(coeff.contents.val.scalar, -1)
+    lincons0_array.p[1].linexpr0 = linexpr0
+
+    #perform the intersection
+    element = elina_abstract0_meet_lincons_array(man,True,element,lincons0_array)
+
+    return element
+
+def analyze(nn, LB_N0, UB_N0, label, old_lower_before=None, old_upper_before=None):
     num_pixels = len(LB_N0)
     nn.ffn_counter = 0
     numlayer = nn.numlayer 
@@ -156,18 +199,32 @@ def analyze(nn, LB_N0, UB_N0, label):
            np.ascontiguousarray(biases, dtype=np.double)
            var = num_in_pixels
            # handle affine layer
+
            for i in range(num_out_pixels):
+
                tdim= ElinaDim(var)
                linexpr0 = generate_linexpr0(weights[i],biases[i],num_in_pixels)
                element = elina_abstract0_assign_linexpr_array(man, True, element, tdim, linexpr0, 1, None)
+
+               if old_lower_before is not None and layerno >= 1:
+                   a = old_lower_before[layerno][i]
+                   b = old_upper_before[layerno][i]
+                   element = performIntersection(man, element, var, a, b)
+
                var+=1
+ 
            dimrem = elina_dimchange_alloc(0,num_in_pixels)
            for i in range(num_in_pixels):
                dimrem.contents.dim[i] = i
            elina_abstract0_remove_dimensions(man, True, element, dimrem)
            elina_dimchange_free(dimrem)
 
-           all_bounds_before.append(elina_abstract0_to_box(man, element))
+           bound = elina_abstract0_to_box(man, element)
+           # for i in range(2):
+               # a = bound[i].contents.inf.contents.val.dbl
+               # b = bound[i].contents.sup.contents.val.dbl
+
+           all_bounds_before.append(bound)
 
            # handle ReLU layer 
            if(nn.layertypes[layerno]=='ReLU'):
@@ -214,20 +271,31 @@ def analyze(nn, LB_N0, UB_N0, label):
 
     elina_interval_array_free(bounds,output_size)
     elina_abstract0_free(man,element)
-    elina_manager_free(man)        
+    elina_manager_free(man)
     return predicted_label, verified_flag, all_bounds_before, all_bounds_after
 
-def doInterval(netname, specname, epsilon):
+def doInterval(netname, specname, epsilon, lower_before=None, upper_before=None):
+
+    global netstring, specstring, nn, classified_label
+
     #c_label = int(argv[4])
-    with open(netname, 'r') as netfile:
-        netstring = netfile.read()
-    with open(specname, 'r') as specfile:
-        specstring = specfile.read()
-    nn = parse_net(netstring)
+    if netstring is None:
+        with open(netname, 'r') as netfile:
+            netstring = netfile.read()
+    if specstring is None:
+        with open(specname, 'r') as specfile:
+            specstring = specfile.read()
+    if nn is None:
+        nn = parse_net(netstring)
     x0_low, x0_high = parse_spec(specstring)
     LB_N0, UB_N0 = get_perturbed_image(x0_low,0)
 
-    label, _, _, _ = analyze(nn,LB_N0,UB_N0,0)
+    if classified_label is None:
+        label, _, _, _ = analyze(nn,LB_N0,UB_N0,0)
+        classified_label = label
+    else:
+        label = classified_label
+
     start = time.time()
 
     verified_flag = None
@@ -237,7 +305,7 @@ def doInterval(netname, specname, epsilon):
     if(label==int(x0_low[0])):
         correctly_classified = True
         LB_N0, UB_N0 = get_perturbed_image(x0_low,epsilon)
-        _, verified_flag, bounds_before, bounds_after = analyze(nn,LB_N0,UB_N0,label)
+        _, verified_flag, bounds_before, bounds_after = analyze(nn,LB_N0,UB_N0,label, lower_before, upper_before)
         # if(verified_flag):
             # print("verified")
         # else:
@@ -394,7 +462,11 @@ def convertBounds(bounds, nn):
 
 def doAnalysis(netname, specname, epsilon):
 
+    global lower_before, lower_after, upper_before, upper_after
+
+    t0 = time.time()
     verified_flag, correctly_classified, nn, image, bounds_before, bounds_after, label = doInterval(netname, specname, epsilon)
+    t1 = time.time()
 
     if not correctly_classified:
         print("interval: can not be verified")
@@ -408,6 +480,11 @@ def doAnalysis(netname, specname, epsilon):
     lower_before, upper_before = convertBounds(bounds_before, nn)
     lower_after, upper_after = convertBounds(bounds_after, nn)
 
+    # print("verif lower before 1", lower_before[-1][:4])
+    # print("verif upper before 1", upper_before[-1][:4])
+    # print("verif lower after 1", lower_after[-1][:4])
+    # print("verif upper after 1", upper_after[-1][:4])
+
     def improveFromTo(start, end):
         if start == 0:
             a, b = image
@@ -418,6 +495,19 @@ def doAnalysis(netname, specname, epsilon):
         lower, upper = improveBounds(nn, a, b, lower_before, upper_before, label, start, end)
         lower_before[end - 1] = lower
         upper_before[end - 1] = upper
+
+    def doIntervalAgain():
+
+        global lower_before, lower_after, upper_before, upper_after
+
+        verified_flag, correctly_classified, nn, image, bounds_before, bounds_after, label = doInterval(netname, specname, epsilon, lower_before, upper_before)
+        lower_before, upper_before = convertBounds(bounds_before, nn)
+        lower_after, upper_after = convertBounds(bounds_after, nn)
+
+        if verified_flag:
+            print("Now verified by interval!")
+        else:
+            print("Still not verified by interval")
 
     def tryToFinishFrom(k):
         if k == 0:
@@ -433,6 +523,12 @@ def doAnalysis(netname, specname, epsilon):
     improve_bounds_two_by_two = True
     improve_bounds_three_by_three = True
 
+    t2 = time.time()
+    doIntervalAgain()
+    t3 = time.time()
+
+    print("verif time", t1 - t0, t3 - t2)
+
     if improve_bounds_two_by_two:
         for k in range(nn.numlayer - 1):
             improveFromTo(k, k+2)
@@ -440,6 +536,12 @@ def doAnalysis(netname, specname, epsilon):
     if improve_bounds_three_by_three:
         for k in range(nn.numlayer - 2):
             improveFromTo(k, k+3)
+
+    t4 = time.time()
+    doIntervalAgain()
+    t5 = time.time()
+
+    print("verif time", t1 - t0, t3 - t2, t5 - t4)
 
     if strategy_doubling:
         comp_k = 1
