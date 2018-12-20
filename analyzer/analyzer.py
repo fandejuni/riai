@@ -30,6 +30,7 @@ small_value = 1e-8
 n_to_treat = 200
 debug = False
 chrono = False
+last_affine = False
 
 class layers:
     def __init__(self):
@@ -267,7 +268,7 @@ def analyze(nn, LB_N0, UB_N0, label, old_lower_before=None, old_upper_before=Non
         inf = bounds[label].contents.inf.contents.val.dbl
         for j in range(output_size):
 
-            assert(bounds[j].contents.inf.contents.val.dbl >= -small_value)
+            # assert(bounds[j].contents.inf.contents.val.dbl >= -small_value)
 
             if(j!=label):
                 sup = bounds[j].contents.sup.contents.val.dbl
@@ -384,6 +385,10 @@ def createNetwork(nn, x_min, x_max, lower_before, upper_before, label, k=0, last
 
         previous_layer = H
         current_layer = RELU_H
+
+    # HANDLE AFFINE AND 1024
+    if last_layer == nn.numlayer and last_affine:
+        current_layer = H
 
     return m, previous_layer, current_layer
 
@@ -598,6 +603,7 @@ def doAnalysis(netname, specname, epsilon):
         stratMedium(layers)
         stratOpti(layers) 
     else:
+        last_affine = True
         stratHard(layers)
         stratMedium(layers)
         stratOpti(layers)
