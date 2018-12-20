@@ -26,6 +26,8 @@ cstdout = c_void_p.in_dll(libc, 'stdout')
 lower_before, lower_after, upper_before, upper_after = None, None, None, None
 netstring, specstring, nn, classified_label = None, None, None, None
 
+small_value = 1e-8
+
 class layers:
     def __init__(self):
         self.layertypes = []
@@ -170,7 +172,7 @@ def performIntersection(man, element, i, a, b):
 def analyze(nn, LB_N0, UB_N0, label, old_lower_before=None, old_upper_before=None):
     num_pixels = len(LB_N0)
     nn.ffn_counter = 0
-    numlayer = nn.numlayer 
+    numlayer = nn.numlayer
     man = elina_box_manager_alloc()
     itv = elina_interval_array_alloc(num_pixels)
     for i in range(num_pixels):
@@ -241,9 +243,8 @@ def analyze(nn, LB_N0, UB_N0, label, old_lower_before=None, old_upper_before=Non
     # get bounds for each output neuron
     bounds = elina_abstract0_to_box(man,element)
 
-           
     # if epsilon is zero, try to classify else verify robustness 
-    
+
     verified_flag = True
     predicted_label = 0
     if(LB_N0[0]==UB_N0[0]):
@@ -258,10 +259,13 @@ def analyze(nn, LB_N0, UB_N0, label, old_lower_before=None, old_upper_before=Non
                       break
             if(flag):
                 predicted_label = i
-                break    
+                break
     else:
         inf = bounds[label].contents.inf.contents.val.dbl
         for j in range(output_size):
+
+            assert(bounds[j].contents.inf.contents.val.dbl >= -small_value)
+
             if(j!=label):
                 sup = bounds[j].contents.sup.contents.val.dbl
                 if(inf<=sup):
@@ -390,17 +394,33 @@ def improveBounds(nn, x_min, x_max, lower_before, upper_before, label, k, last_l
     upper_bounds = []
 
     m.Params.DualReductions = 0
-    for i in range(len(current_layer)):
 
-        m.setObjective(current_layer[i], GRB.MINIMIZE)
-        m.optimize()
-        value = printResults(m)
-        lower_bounds.append(value)
+    length = len(current_layer)
 
-        m.setObjective(current_layer[i], GRB.MAXIMIZE)
-        m.optimize()
-        value = printResults(m)
-        upper_bounds.append(value)
+    print("improve...", k, "->", last_layer)
+
+    for i in range(length):
+
+        if upper_before[last_layer - 1][i] > 0:
+
+            m.setObjective(current_layer[i], GRB.MINIMIZE)
+            m.optimize()
+            value = printResults(m)
+            lower_bounds.append(value)
+
+            assert(lower_before[last_layer - 1][i] <= value + small_value)
+
+            m.setObjective(current_layer[i], GRB.MAXIMIZE)
+            m.optimize()
+            value = printResults(m)
+            upper_bounds.append(value)
+
+            assert(value <= upper_before[last_layer - 1][i] + small_value)
+
+        else:
+
+            lower_bounds.append(lower_before[last_layer - 1][i])
+            upper_bounds.append(upper_before[last_layer - 1][i])
 
     return lower_bounds, upper_bounds
 
@@ -466,7 +486,7 @@ def doAnalysis(netname, specname, epsilon):
 
     global lower_before, lower_after, upper_before, upper_after
     chrono = True
-    
+
     def printTime(string, time):
         if chrono:
             print("verif time: ", string, time)
@@ -506,7 +526,7 @@ def doAnalysis(netname, specname, epsilon):
     def doIntervalAgain():
         start = time.time()
         global lower_before, lower_after, upper_before, upper_after
-        
+ 
         verified_flag, correctly_classified, nn, image, bounds_before, bounds_after, label = doInterval(netname, specname, epsilon, lower_before, upper_before)
         lower_before, upper_before = convertBounds(bounds_before, nn)
         lower_after, upper_after = convertBounds(bounds_after, nn)
