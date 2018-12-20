@@ -561,6 +561,12 @@ def doAnalysis(netname, specname, epsilon):
             b = upper_after[k-1]
         victory(analyzeEnd(nn, a, b, lower_before, upper_before, label, k=k) > 0)
 
+
+    def finishSeq(n):
+        for k in range(n, -1, -1):
+            tryToFinishFrom(k)
+
+
     # STRATEGIES / HEURISTICS
 
     printTime("First interval", t1 - t0)
@@ -584,10 +590,10 @@ def doAnalysis(netname, specname, epsilon):
             doIntervalAgain()
             tryToFinishFrom(0)
 
-    def startHard(layers):
+    def startHard(n):
         improveFromTo(0,2)
         doIntervalAgain()
-        strategy_seq()
+        tryToFinishSeq(n)
 
     neurons = len(nn.biases[0])
     layers = nn.numlayer
