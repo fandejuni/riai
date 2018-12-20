@@ -28,8 +28,8 @@ netstring, specstring, nn, classified_label = None, None, None, None
 
 small_value = 1e-8
 n_to_treat = 200
-debug = False
-chrono = False
+debug = True
+chrono = True
 
 class layers:
     def __init__(self):
@@ -267,6 +267,7 @@ def analyze(nn, LB_N0, UB_N0, label, old_lower_before=None, old_upper_before=Non
         inf = bounds[label].contents.inf.contents.val.dbl
         for j in range(output_size):
 
+            print(bounds[j].contents.inf.contents.val.dbl)
             assert(bounds[j].contents.inf.contents.val.dbl >= -small_value)
 
             if(j!=label):
@@ -318,7 +319,7 @@ def doInterval(netname, specname, epsilon, lower_before=None, upper_before=None)
         print("image not correctly classified by the network. expected label ",int(x0_low[0]), " classified label: ", label)
     end = time.time()
 
-    if debug:
+    if chrono:
         print("analysis time: ", (end-start), " seconds")
 
     return verified_flag, correctly_classified, nn, (LB_N0, UB_N0), bounds_before, bounds_after, label
@@ -410,9 +411,6 @@ def improveBounds(nn, x_min, x_max, lower_before, upper_before, label, k, last_l
 
     for i in indices:
 
-        if debug:
-            print(i, current_upper[i], current_lower[i])
-
         if current_upper[i] > 0:
 
             m.setObjective(current_layer[i], GRB.MINIMIZE)
@@ -495,12 +493,14 @@ def doAnalysis(netname, specname, epsilon):
 
     def victory(verified):
         if verified:
+            if chrono:
+                print("Total time: ", time.time() - t0)
             print("verified")
             exit()
 
     def printTime(string, time):
         if chrono:
-            print("verif time: ", string, time)
+            print(string, time)
 
     t0 = time.time()
     verified_flag, correctly_classified, nn, image, bounds_before, bounds_after, label = doInterval(netname, specname, epsilon)
@@ -524,6 +524,7 @@ def doAnalysis(netname, specname, epsilon):
     lower_after, upper_after = convertBounds(bounds_after, nn)
 
     def improveFromTo(start, end):
+        t0 = time.time()
         if start == 0:
             a, b = image
         else:
@@ -533,6 +534,7 @@ def doAnalysis(netname, specname, epsilon):
         lower, upper = improveBounds(nn, a, b, lower_before, upper_before, label, start, end)
         lower_before[end - 1] = lower
         upper_before[end - 1] = upper
+        printTime("improveFromTo", time.time() - t0)
 
     def doIntervalAgain():
         start = time.time()
@@ -554,16 +556,21 @@ def doAnalysis(netname, specname, epsilon):
         victory(verified_flag)
 
     def tryToFinishFrom(k):
+        start = time.time()
         if k == 0:
             a, b = image
         else:
             a = lower_after[k-1]
             b = upper_after[k-1]
-        victory(analyzeEnd(nn, a, b, lower_before, upper_before, label, k=k) > 0)
+        r = analyzeEnd(nn, a, b, lower_before, upper_before, label, k=k)
+        if debug:
+            print("try to finish from", k, ": ", r)
+        printTime("tryToFinish time", time.time() - start)    
+        victory(r > 0)
 
 
     def finishSeq(n):
-        for k in range(n, -1, -1):
+        for k in range(n - 1, -1, -1):
             tryToFinishFrom(k)
 
 
@@ -598,11 +605,8 @@ def doAnalysis(netname, specname, epsilon):
     neurons = len(nn.biases[0])
     layers = nn.numlayer
 
-    if neurons < 150:
+    if neurons < 400:
         stratOpti(layers)
-    elif neurons < 400:
-        stratMedium(layers)
-        stratOpti(layers) 
     else:
         stratHard(layers)
         stratMedium(layers)
