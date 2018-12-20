@@ -559,30 +559,52 @@ def doAnalysis(netname, specname, epsilon):
         else:
             a = lower_after[k-1]
             b = upper_after[k-1]
-        return analyzeEnd(nn, a, b, lower_before, upper_before, label, k=k)
+        victory(analyzeEnd(nn, a, b, lower_before, upper_before, label, k=k) > 0)
 
     # STRATEGIES / HEURISTICS
 
     printTime("First interval", t1 - t0)
 
+    def stratOpti(n):
+        for i in range(2, n+1):
+            improveFromTo(0, i)
+            doIntervalAgain()
+            tryToFinishFrom(0)
+
+    def stratMedium(n):
+        for i in range(n-1):
+            improveFromTo(i, i+2)
+            doIntervalAgain()
+            k = max(n-6, 0)
+            tryToFinishFrom(k)
+        if n > 6:
+            tryToFinishFrom(0)
+        for i in range(n//3):
+            improveFromTo(i*3, (i+1)*3)
+            doIntervalAgain()
+            tryToFinishFrom(0)
+
+    def startHard(layers):
+        improveFromTo(0,2)
+        doIntervalAgain()
+        strategy_seq()
+
     neurons = len(nn.biases[0])
     layers = nn.numlayer
 
-    if neurons < 100:
-        verif = stratInf100()
-    elif neurons < 200:
-        verif = strat100()
-    elif neurons < 1000:
-        if epsilon < 0.01:
-            verif = strat200_1()
-        else:
-            verif = strat200_2()
+    if neurons < 150:
+        stratOpti(layers)
+    elif neurons < 400:
+        stratMedium(layers)
+        stratOpti(layers) 
     else:
-        verif = strat1024()
+        stratHard(layers)
+        stratMedium(layers)
+        stratOpti(layers)
 
     printTime("Total", time.time() - t0)
-    if not verif:
-        print("can not be verified")
+
+    print("can not be verified")
 
 if __name__ == '__main__':
     from sys import argv
