@@ -28,6 +28,8 @@ netstring, specstring, nn, classified_label = None, None, None, None
 
 small_value = 1e-8
 n_to_treat = 200
+debug = False
+chrono = False
 
 class layers:
     def __init__(self):
@@ -238,7 +240,7 @@ def analyze(nn, LB_N0, UB_N0, label, old_lower_before=None, old_upper_before=Non
 
         else:
            print(' net type not supported')
-   
+
     dims = elina_abstract0_dimension(man,element)
     output_size = dims.intdim + dims.realdim
     # get bounds for each output neuron
@@ -311,15 +313,13 @@ def doInterval(netname, specname, epsilon, lower_before=None, upper_before=None)
         correctly_classified = True
         LB_N0, UB_N0 = get_perturbed_image(x0_low,epsilon)
         _, verified_flag, bounds_before, bounds_after = analyze(nn,LB_N0,UB_N0,label, lower_before, upper_before)
-        # if(verified_flag):
-            # print("verified")
-        # else:
-            # print("can not be verified")
     else:
         correctly_classified = False
         print("image not correctly classified by the network. expected label ",int(x0_low[0]), " classified label: ", label)
     end = time.time()
-    print("analysis time: ", (end-start), " seconds")
+
+    if debug:
+        print("analysis time: ", (end-start), " seconds")
 
     return verified_flag, correctly_classified, nn, (LB_N0, UB_N0), bounds_before, bounds_after, label
 
@@ -394,14 +394,15 @@ def improveBounds(nn, x_min, x_max, lower_before, upper_before, label, k, last_l
     current_lower = lower_before[last_layer - 1]
     current_upper = upper_before[last_layer - 1]
 
-    lower_bounds = []
-    upper_bounds = []
+    lower_bounds = [elem for elem in current_lower]
+    upper_bounds = [elem for elem in current_upper]
 
     m.Params.DualReductions = 0
 
     length = len(current_layer)
 
-    print("improve...", k, "->", last_layer)
+    if debug:
+        print("improve...", k, "->", last_layer)
 
     indices = list(range(length))
     indices.sort(key = lambda i: max(current_lower[i], 0) - current_upper[i])
@@ -409,28 +410,24 @@ def improveBounds(nn, x_min, x_max, lower_before, upper_before, label, k, last_l
 
     for i in indices:
 
-        print(i, current_upper[i], current_lower[i])
+        if debug:
+            print(i, current_upper[i], current_lower[i])
 
         if current_upper[i] > 0:
 
             m.setObjective(current_layer[i], GRB.MINIMIZE)
             m.optimize()
             value = printResults(m)
-            lower_bounds.append(value)
+            lower_bounds[i] = value
 
             assert(current_lower[i] <= value + small_value)
 
             m.setObjective(current_layer[i], GRB.MAXIMIZE)
             m.optimize()
             value = printResults(m)
-            upper_bounds.append(value)
+            upper_bounds[i] = value
 
             assert(value <= current_upper[i] + small_value)
-
-        else:
-
-            lower_bounds.append(current_lower[i])
-            upper_bounds.append(current_upper[i])
 
     return lower_bounds, upper_bounds
 
@@ -495,7 +492,11 @@ def convertBounds(bounds, nn):
 def doAnalysis(netname, specname, epsilon):
 
     global lower_before, lower_after, upper_before, upper_after
-    chrono = True
+
+    def victory(verified):
+        if verified:
+            print("verified")
+            exit()
 
     def printTime(string, time):
         if chrono:
@@ -506,21 +507,21 @@ def doAnalysis(netname, specname, epsilon):
     t1 = time.time()
 
     if not correctly_classified:
-        print("interval: can not be verified")
-        return
+        if debug:
+            print("interval: can not be verified")
+        exit()
+
     if verified_flag:
-        print("interval: verified")
-        # return
+        if debug:
+            print("interval: verified")
     else:
-        print("interval: not verified")
+        if debug:
+            print("interval: not verified")
+
+    victory(verified_flag)
 
     lower_before, upper_before = convertBounds(bounds_before, nn)
     lower_after, upper_after = convertBounds(bounds_after, nn)
-
-    # print("verif lower before 1", lower_before[-1][:4])
-    # print("verif upper before 1", upper_before[-1][:4])
-    # print("verif lower after 1", lower_after[-1][:4])
-    # print("verif upper after 1", upper_after[-1][:4])
 
     def improveFromTo(start, end):
         if start == 0:
@@ -537,17 +538,20 @@ def doAnalysis(netname, specname, epsilon):
         start = time.time()
         global lower_before, lower_after, upper_before, upper_after
  
-        verified_flag, correctly_classified, nn, image, bounds_before, bounds_after, label = doInterval(netname, specname, epsilon, lower_before, upper_before)
+        verified_flag, _, nn, image, bounds_before, bounds_after, label = doInterval(netname, specname, epsilon, lower_before, upper_before)
         lower_before, upper_before = convertBounds(bounds_before, nn)
         lower_after, upper_after = convertBounds(bounds_after, nn)
 
         if verified_flag:
-            print("Now verified by interval!")
+            if debug:
+                print("Now verified by interval!")
         else:
-            print("Still not verified by interval")
+            if debug:
+                print("Still not verified by interval")
 
         printTime("New Interval", time.time() - start)
 
+        victory(verified_flag)
 
     def tryToFinishFrom(k):
         if k == 0:
@@ -560,113 +564,6 @@ def doAnalysis(netname, specname, epsilon):
     # STRATEGIES / HEURISTICS
 
     printTime("First interval", t1 - t0)
-
-    def improve_bounds_two_by_two():
-        start = time.time()
-        for k in range(nn.numlayer - 1):
-            print("verif Improve2 k: ", k)
-            improveFromTo(k, k+2)
-        printTime("Improve2", time.time() - start)
-
-    def improve_bounds_three_by_three():
-        start = time.time()
-        for k in range(nn.numlayer - 2):
-            print("verif Improve3 k: ", k)
-            improveFromTo(k, k+3)
-        printTime("Improve3", time.time() - start)
-
-    def strategy_doubling():
-        start = time.time()
-        comp_k = 1
-        go_on = True
-        verif = False
-        while go_on:
-            k = nn.numlayer - comp_k
-            print("Trying k = " + str(k) + "...")
-            r = tryToFinishFrom(k)
-            print("verification: k = " + str(k) + ", r = " + str(r))
-            if r > 0:
-                verif = True
-                printTime("Doubling", time.time() - start)
-                print("verified")
-                return(verif, r)
-            if comp_k == nn.numlayer:
-                go_on = False
-            else:
-                comp_k = comp_k * 2
-                if comp_k > nn.numlayer:
-                    comp_k = nn.numlayer
-
-        printTime("Doubling", time.time() - start)
-        return (verif, r)
-
-    def stratInf100():
-        improve_bounds_two_by_two()
-        improve_bounds_three_by_three()
-        doIntervalAgain()
-        verif, r = strategy_doubling()
-        old_r = r-1
-        while (not verif and old_r < r):
-            old_r = r
-            improve_bounds_two_by_two()
-            improve_bounds_three_by_three()
-            doIntervalAgain()
-            verif, r = strategy_doubling()
-        return verif
-
-    def strat100():
-        improve_bounds_two_by_two()
-        improve_bounds_three_by_three()
-        doIntervalAgain()
-        verif, r = strategy_doubling()
-        old_r = r-1
-        while (not verif and old_r < r):
-            old_r = r
-            improve_bounds_two_by_two()
-            improve_bounds_three_by_three()
-            doIntervalAgain()
-            verif, r = strategy_doubling()
-        return verif
-
-    def strat200_1():
-        start = time.time()
-        improveFromTo(0,2)
-        improveFromTo(1,3)
-        printTime("improveFT 0-2, 1-3", time.time() - start)
-        doIntervalAgain()
-        verif, r = strategy_doubling()
-        old_r = r-1
-        k = 2
-        while (not verif and old_r < r):
-            old_r = r
-            start = time.time()
-            improveFromTo(k, k+2)
-            printTime("improveFT k" + str(k), time.time() -start)
-            if k+2 < nn.numlayer:
-                k += 1
-            doIntervalAgain()
-            verif, r = strategy_doubling()
-        return verif
-
-    def strat200_2():
-        start = time.time()
-        improveFromTo(0,2)
-        improveFromTo(1,3)
-        printTime("improveFT 0-2, 1-3", time.time() - start)
-        doIntervalAgain()
-        verif = False
-        r = tryToFinishFrom(nn.numlayer-1)
-        print("verification: k = n-1, r = " + str(r))
-        if r > 0:
-            verif = True
-        return verif
-
-
-    def strat1024():
-        improveFromTo(0, 2)
-        doIntervalAgain()
-        verif, r = strategy_doubling()
-        return verif
 
     neurons = len(nn.biases[0])
     layers = nn.numlayer
