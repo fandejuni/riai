@@ -545,6 +545,12 @@ def doAnalysis(netname, specname, epsilon):
             improveFromTo(k, k+3)
         printTime("Improve3", time.time() - start)
 
+    def improveFrom0To(k):
+        start = time.time()
+        print("verif Improve 0-" + str(k))
+        improveFromTo(0, k)
+        printTime("Improve 0-" + str(k), time.time() - start)
+
     def strategy_doubling():
         start = time.time()
         comp_k = 1
@@ -584,6 +590,15 @@ def doAnalysis(netname, specname, epsilon):
             verif, r = strategy_doubling()
         return verif
 
+    def stratInf100_best():
+        for i in range(2, nn.numlayer+1):
+            improveFrom0To(i)
+            doIntervalAgain()
+        verif, r = strategy_doubling()
+
+        return verif
+    
+    
     def strat100():
         improve_bounds_two_by_two()
         improve_bounds_three_by_three()
@@ -632,6 +647,7 @@ def doAnalysis(netname, specname, epsilon):
         return verif
 
 
+
     def strat1024():
         if epsilon >= 0.01:
             verif, r = strategy_doubling()
@@ -645,9 +661,9 @@ def doAnalysis(netname, specname, epsilon):
     layers = nn.numlayer
 
     if neurons < 100:
-        verif = stratInf100()    
+        verif = stratInf100_best()    
     elif neurons < 200:
-        verif = strat100()    
+        verif = stratInf100_best()    
     elif neurons < 1000:
         if epsilon < 0.01:
             verif = strat200_1()
