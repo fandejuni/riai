@@ -26,6 +26,8 @@ cstdout = c_void_p.in_dll(libc, 'stdout')
 lower_before, lower_after, upper_before, upper_after = None, None, None, None
 netstring, specstring, nn, classified_label = None, None, None, None
 
+small_value = 1e-8
+
 class layers:
     def __init__(self):
         self.layertypes = []
@@ -390,17 +392,33 @@ def improveBounds(nn, x_min, x_max, lower_before, upper_before, label, k, last_l
     upper_bounds = []
 
     m.Params.DualReductions = 0
-    for i in range(len(current_layer)):
 
-        m.setObjective(current_layer[i], GRB.MINIMIZE)
-        m.optimize()
-        value = printResults(m)
-        lower_bounds.append(value)
+    length = len(current_layer)
 
-        m.setObjective(current_layer[i], GRB.MAXIMIZE)
-        m.optimize()
-        value = printResults(m)
-        upper_bounds.append(value)
+    print("improve...", k, "->", last_layer)
+
+    for i in range(length):
+
+        if upper_before[last_layer - 1][i] > 0:
+
+            m.setObjective(current_layer[i], GRB.MINIMIZE)
+            m.optimize()
+            value = printResults(m)
+            lower_bounds.append(value)
+
+            assert(lower_before[last_layer - 1][i] <= value + small_value)
+
+            m.setObjective(current_layer[i], GRB.MAXIMIZE)
+            m.optimize()
+            value = printResults(m)
+            upper_bounds.append(value)
+
+            assert(value <= upper_before[last_layer - 1][i] + small_value)
+
+        else:
+
+            lower_bounds.append(lower_before[last_layer - 1][i])
+            upper_bounds.append(upper_before[last_layer - 1][i])
 
     return lower_bounds, upper_bounds
 
@@ -665,10 +683,7 @@ def doAnalysis(netname, specname, epsilon):
     elif neurons < 200:
         verif = stratInf100_best()    
     elif neurons < 1000:
-        if epsilon < 0.01:
-            verif = strat200_1()
-        else:
-            verif = strat200_2()
+        verif = stratInf100_best()    
     else:
         verif = strat1024()    
 
