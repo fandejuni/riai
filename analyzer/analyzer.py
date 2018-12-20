@@ -27,6 +27,7 @@ lower_before, lower_after, upper_before, upper_after = None, None, None, None
 netstring, specstring, nn, classified_label = None, None, None, None
 
 small_value = 1e-8
+n_to_treat = 200
 
 class layers:
     def __init__(self):
@@ -390,6 +391,9 @@ def improveBounds(nn, x_min, x_max, lower_before, upper_before, label, k, last_l
 
     m, current_layer, _ = createNetwork(nn, x_min, x_max, lower_before, upper_before, label, k, last_layer=last_layer)
 
+    current_lower = lower_before[last_layer - 1]
+    current_upper = upper_before[last_layer - 1]
+
     lower_bounds = []
     upper_bounds = []
 
@@ -399,28 +403,34 @@ def improveBounds(nn, x_min, x_max, lower_before, upper_before, label, k, last_l
 
     print("improve...", k, "->", last_layer)
 
-    for i in range(length):
+    indices = list(range(length))
+    indices.sort(key = lambda i: max(current_lower[i], 0) - current_upper[i])
+    indices[:n_to_treat]
 
-        if upper_before[last_layer - 1][i] > 0:
+    for i in indices:
+
+        print(i, current_upper[i], current_lower[i])
+
+        if current_upper[i] > 0:
 
             m.setObjective(current_layer[i], GRB.MINIMIZE)
             m.optimize()
             value = printResults(m)
             lower_bounds.append(value)
 
-            assert(lower_before[last_layer - 1][i] <= value + small_value)
+            assert(current_lower[i] <= value + small_value)
 
             m.setObjective(current_layer[i], GRB.MAXIMIZE)
             m.optimize()
             value = printResults(m)
             upper_bounds.append(value)
 
-            assert(value <= upper_before[last_layer - 1][i] + small_value)
+            assert(value <= current_upper[i] + small_value)
 
         else:
 
-            lower_bounds.append(lower_before[last_layer - 1][i])
-            upper_bounds.append(upper_before[last_layer - 1][i])
+            lower_bounds.append(current_lower[i])
+            upper_bounds.append(current_upper[i])
 
     return lower_bounds, upper_bounds
 
@@ -653,28 +663,25 @@ def doAnalysis(netname, specname, epsilon):
 
 
     def strat1024():
-        if epsilon >= 0.01:
-            verif, r = strategy_doubling()
-        else:
-            improveFromTo(0, 2)
-            doIntervalAgain()
-            verif, r = strategy_doubling()
+        improveFromTo(0, 2)
+        doIntervalAgain()
+        verif, r = strategy_doubling()
         return verif
 
     neurons = len(nn.biases[0])
     layers = nn.numlayer
 
     if neurons < 100:
-        verif = stratInf100()    
+        verif = stratInf100()
     elif neurons < 200:
-        verif = strat100()    
+        verif = strat100()
     elif neurons < 1000:
         if epsilon < 0.01:
             verif = strat200_1()
         else:
             verif = strat200_2()
     else:
-        verif = strat1024()    
+        verif = strat1024()
 
     printTime("Total", time.time() - t0)
     if not verif:
