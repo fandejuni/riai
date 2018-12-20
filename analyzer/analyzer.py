@@ -385,8 +385,10 @@ def createNetwork(nn, x_min, x_max, lower_before, upper_before, label, k=0, last
     return m, previous_layer, current_layer
 
 def improveBounds(nn, x_min, x_max, lower_before, upper_before, label, k, last_layer):
-
+    start = time.time()
     m, current_layer, _ = createNetwork(nn, x_min, x_max, lower_before, upper_before, label, k, last_layer=last_layer)
+
+    print("Create network: ", time.time() - start)
 
     lower_bounds = []
     upper_bounds = []
@@ -395,9 +397,12 @@ def improveBounds(nn, x_min, x_max, lower_before, upper_before, label, k, last_l
 
     length = len(current_layer)
 
-    print("improve...", k, "->", last_layer)
+
+    t0 = time.time()
 
     for i in range(length):
+        if (i % 10 == 9):
+            print(i, time.time() - t0)
 
         if upper_before[last_layer - 1][i] > 0:
 
@@ -538,12 +543,15 @@ def doAnalysis(netname, specname, epsilon):
 
 
     def tryToFinishFrom(k):
+        start = time.time()
         if k == 0:
             a, b = image
         else:
             a = lower_after[k-1]
             b = upper_after[k-1]
-        return analyzeEnd(nn, a, b, lower_before, upper_before, label, k=k)
+        x = analyzeEnd(nn, a, b, lower_before, upper_before, label, k=k)
+        printTime("finish from " + str(k) + ": ", time.time() - start)
+        return x
 
     # STRATEGIES / HEURISTICS
 
@@ -594,6 +602,20 @@ def doAnalysis(netname, specname, epsilon):
         printTime("Doubling", time.time() - start)
         return (verif, r)
 
+    def strategy_seq():
+        verif = False
+        for k in range(nn.numlayer - 1, -1, -1):
+            start = time.time()
+            print("Trying k = " + str(k) + "...")
+            r = tryToFinishFrom(k)
+            print("verification: k = " + str(k) + ", r = " + str(r))
+            printTime("Seq", time.time() - start)
+            if r > 0:
+                verif = True
+                print("verified")
+                return(verif, r)
+
+        printTime("Doubling", time.time() - start)
     def stratInf100():
         improve_bounds_two_by_two()
         improve_bounds_three_by_three()
@@ -608,14 +630,31 @@ def doAnalysis(netname, specname, epsilon):
             verif, r = strategy_doubling()
         return verif
 
-    def stratInf100_best():
+    def stratOpti():
         for i in range(2, nn.numlayer+1):
             improveFrom0To(i)
             doIntervalAgain()
-        verif, r = strategy_doubling()
-
+        verif = False
+        r = tryToFinishFrom(0)
+        print("verification: k = 0, r = " + str(r))
+        if r > 0:
+           verif = True
         return verif
     
+    def stratOpti2():
+        for i in range(2, nn.numlayer+1):
+            improveFrom0To(i)
+            doIntervalAgain()
+            verif = False
+            r = tryToFinishFrom(0)
+            if r > 0:
+                verif = True
+                return verif
+                
+        r = tryToFinishFrom(0)
+        if r > 0:
+            verif = True
+        return verif
     
     def strat100():
         improve_bounds_two_by_two()
@@ -675,19 +714,59 @@ def doAnalysis(netname, specname, epsilon):
             verif, r = strategy_doubling()
         return verif
 
+
+    def strat1024_best1():
+        verif = False
+        r = tryToFinishFrom(nn.numlayer-1)
+        print("verification: k = n-1, r = " + str(r))
+        if r > 0:
+            verif = True
+        r = tryToFinishFrom(nn.numlayer-2)
+        print("verification: k = n-2, r = " + str(r))
+        if r > 0:
+            verif = True
+        r = tryToFinishFrom(nn.numlayer-3)
+        print("verification: k = n-3, r = " + str(r))
+        if r > 0:
+            verif = True
+        r = tryToFinishFrom(nn.numlayer-4)
+        print("verification: k = n-4, r = " + str(r))
+        if r > 0:
+            verif = True
+        return verif
+
+    def strat1024_best2():
+        improveFromTo(2, 4)
+        improveFromTo(0, 2)
+        doIntervalAgain()	
+        verif = False
+        r = tryToFinishFrom(nn.numlayer-1)
+        print("verification: k = n-1, r = " + str(r))
+        if r > 0:
+            verif = True
+        r = tryToFinishFrom(nn.numlayer-2)
+        print("verification: k = n-2, r = " + str(r))
+        if r > 0:
+            verif = True
+        return verif
+
+    def test200():
+        improveFromTo(0,3)
+        improveFromTo(1,4)
+        return False
+
     neurons = len(nn.biases[0])
     layers = nn.numlayer
 
-    if neurons < 100:
-        verif = stratInf100_best()    
-    elif neurons < 200:
-        verif = stratInf100_best()    
+    if neurons < 201:
+       strategy_seq() 
     elif neurons < 1000:
         verif = stratInf100_best()    
     else:
-        verif = strat1024()    
+       verif = strat1024_best2()
 
-    printTime("Total", time.time() - t0)
+    printTime("Total", time.time() - t0) 
+    
     if not verif:
         print("can not be verified")
 
