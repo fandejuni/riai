@@ -333,9 +333,11 @@ def connectRelu(m, H, RELU_H, a, b):
 		m.addConstr(RELU_H <= alpha * (H - a))
 
 def createNetwork(nn, x_min, x_max, lower_before, upper_before, label, k=0, last_layer=None):
+
     # k = 0 -> from beginning
     # k = 0 -> x_* = image_*
     m = Model('NN')
+    m.setParam( 'OutputFlag', False )
 
     x = []
     for i in range(len(x_min)):
