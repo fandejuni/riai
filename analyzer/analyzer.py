@@ -662,26 +662,48 @@ def doAnalysis(netname, specname, epsilon):
         return verif
 
 
-    def strat1024():
+    def strat1024(n):
         improveFromTo(0, 2)
         doIntervalAgain()
         verif, r = strategy_doubling()
         return verif
 
+    def stratOpti(n):
+        for i in range(2, n+1):
+            improveFromTo(0, i)
+            doIntervalAgain()
+            tryToFinishFrom(0)
+
+    def stratMedium(n):
+        for i in range(n-1):
+            improveFromTo(i, i+2)
+            doIntervalAgain()
+            k = max(n-6, 0)
+            tryToFinishFrom(k)
+        if n > 6:
+            tryToFinishFrom(0)
+        for i in range(n//3):
+            improveFromTo(i*3, (i+1)*3)
+            doIntervalAgain()
+            tryToFinishFrom(0)
+
+    def startHard(layers):
+        improveFromTo(0,2)
+        doIntervalAgain()
+        strategy_seq()    
+    
     neurons = len(nn.biases[0])
     layers = nn.numlayer
 
-    if neurons < 100:
-        verif = stratInf100()
-    elif neurons < 200:
-        verif = strat100()
-    elif neurons < 1000:
-        if epsilon < 0.01:
-            verif = strat200_1()
-        else:
-            verif = strat200_2()
+    if neurons < 150:
+        stratOpti(layers)
+    elif neurons < 400:
+        stratMedium(layers)
+        stratOpti(layers) 
     else:
-        verif = strat1024()
+        stratHard(layers)
+        stratMedium(layers)
+        stratOpti(layers)
 
     printTime("Total", time.time() - t0)
     if not verif:
